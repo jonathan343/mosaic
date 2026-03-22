@@ -7,9 +7,20 @@
 
 import SwiftUI
 import SwiftData
+#if os(iOS)
+import UIKit
+#endif
 
 struct ContentView: View {
+    private let gridCoordinateSpaceName = "collectionGrid"
+    private let reorderAnimation = Animation.interpolatingSpring(stiffness: 240, damping: 24)
+    private let dropCompletionAnimation = Animation.spring(response: 0.28, dampingFraction: 0.72)
+    private let pickupAnimation = Animation.spring(response: 0.22, dampingFraction: 0.78)
+
     @Environment(\.modelContext) private var modelContext
+#if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+#endif
     @Query(sort: [
         SortDescriptor(\MosaicCollection.order),
         SortDescriptor(\MosaicCollection.name)
@@ -22,25 +33,68 @@ struct ContentView: View {
 #endif
     @State private var isPresentingAddCollection = false
     @State private var pendingCollectionDeletion: PendingCollectionDeletion?
+    @State private var draggedCollectionID: PersistentIdentifier?
+    @State private var draggedCollectionLocation: CGPoint?
+    @State private var draggedCollectionTouchOffset: CGSize = .zero
+    @State private var collectionFrames: [PersistentIdentifier: CGRect] = [:]
+    @State private var lastReorderTarget: ReorderTarget?
+    @State private var currentGridColumnCount = 2
+    @State private var isDragPreviewLifted = false
+#if os(iOS)
+    @State private var reorderFeedbackGenerator = UIImpactFeedbackGenerator(style: .light)
+#endif
 
     var body: some View {
         NavigationStack {
-            List {
-                if collections.isEmpty {
-                    EmptyMosaicView()
-                        .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
-                        .listRowSeparator(.hidden)
-                } else {
-                    ForEach(collections) { collection in
-                        collectionRow(for: collection)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                        .listRowSeparator(.hidden)
+            GeometryReader { geometry in
+                ZStack(alignment: .topLeading) {
+                    ScrollView {
+                        if collections.isEmpty {
+                            EmptyMosaicView()
+                                .padding(16)
+                        } else {
+                            LazyVGrid(columns: gridColumns(for: geometry.size.width), spacing: 16) {
+                                ForEach(collections) { collection in
+                                    collectionRow(for: collection)
+                                }
+                            }
+                            .animation(reorderAnimation, value: collectionOrderSignature)
+                            .padding(16)
+                        }
                     }
-                    .onDelete(perform: deleteCollections)
-                    .onMove(perform: moveCollections)
+                    .accessibilityIdentifier("collectionGrid")
+                    .accessibilityValue(collections.map(\.name).joined(separator: "|"))
+                    .coordinateSpace(name: gridCoordinateSpaceName)
+                    .onPreferenceChange(CollectionFramePreferenceKey.self) { frames in
+                        collectionFrames = frames
+                    }
+                    .onAppear {
+                        currentGridColumnCount = columnCount(for: geometry.size.width)
+                    }
+                    .onChange(of: geometry.size.width) { _, width in
+                        currentGridColumnCount = columnCount(for: width)
+                    }
+
+                    if let draggedCollection,
+                       let draggedFrame = collectionFrames[draggedCollection.persistentModelID] {
+                        CollectionCard(
+                            collection: draggedCollection,
+                            isDragged: false
+                        )
+                        .frame(width: draggedFrame.width, height: draggedFrame.height)
+                        .scaleEffect(isDragPreviewLifted ? 1.05 : 1.01)
+                        .shadow(
+                            color: .black.opacity(isDragPreviewLifted ? 0.2 : 0.08),
+                            radius: isDragPreviewLifted ? 16 : 8,
+                            y: isDragPreviewLifted ? 10 : 4
+                        )
+                        .animation(pickupAnimation, value: isDragPreviewLifted)
+                        .position(currentDraggedCenter())
+                        .zIndex(10)
+                        .allowsHitTesting(false)
+                    }
                 }
             }
-            .listStyle(.plain)
 #if os(iOS)
             .environment(\.editMode, $editMode)
 #endif
@@ -97,8 +151,33 @@ struct ContentView: View {
             }
             .task {
                 seedCollectionsIfNeeded()
+#if os(iOS)
+                reorderFeedbackGenerator.prepare()
+#endif
+            }
+            .onChange(of: isCollectionEditing) { _, isEditing in
+                if !isEditing {
+                    resetDragState()
+                }
             }
         }
+    }
+
+    private var isCollectionEditing: Bool {
+#if os(iOS)
+        editMode.isEditing
+#else
+        isEditingCollections
+#endif
+    }
+
+    private var collectionOrderSignature: [PersistentIdentifier] {
+        collections.map(\.persistentModelID)
+    }
+
+    private var draggedCollection: MosaicCollection? {
+        guard let draggedCollectionID else { return nil }
+        return collections.first { $0.persistentModelID == draggedCollectionID }
     }
 
     private func seedCollectionsIfNeeded() {
@@ -109,35 +188,17 @@ struct ContentView: View {
         )
     }
 
-    private func deleteCollections(offsets: IndexSet) {
-        let collectionsToDelete = offsets.map { collections[$0] }
-        guard !collectionsToDelete.isEmpty else { return }
-
-        pendingCollectionDeletion = PendingCollectionDeletion(collections: collectionsToDelete)
-    }
-
     private func confirmCollectionDeletion(_ deletion: PendingCollectionDeletion) {
         let collectionIDs = deletion.collectionIDs
         let survivingCollections = collections.filter { collection in
             !collectionIDs.contains(collection.persistentModelID)
         }
 
-        withAnimation {
+        withAnimation(reorderAnimation) {
             for collection in collections where collectionIDs.contains(collection.persistentModelID) {
                 modelContext.delete(collection)
             }
             normalizeCollectionOrder(for: survivingCollections)
-        }
-    }
-
-    private func moveCollections(from source: IndexSet, to destination: Int) {
-        var reorderedCollections = collections
-        reorderedCollections.move(fromOffsets: source, toOffset: destination)
-
-        withAnimation {
-            for (index, collection) in reorderedCollections.enumerated() {
-                collection.order = index
-            }
         }
     }
 
@@ -148,80 +209,262 @@ struct ContentView: View {
         }
     }
 
+    private func gridColumns(for width: CGFloat) -> [GridItem] {
+        let count = columnCount(for: width)
+        let spacing: CGFloat = 16
+
+        return Array(
+            repeating: GridItem(.flexible(), spacing: spacing, alignment: .top),
+            count: count
+        )
+    }
+
+    private func columnCount(for width: CGFloat) -> Int {
+        let spacing: CGFloat = 16
+        let horizontalPadding: CGFloat = 32
+        let availableWidth = max(width - horizontalPadding, 0)
+        let targetCardWidth: CGFloat = 180
+#if os(iOS)
+        let minimumColumnCount = horizontalSizeClass == .compact ? 2 : 2
+#else
+        let minimumColumnCount = 1
+#endif
+        let fittedColumnCount = Int((availableWidth + spacing) / (targetCardWidth + spacing))
+        return max(minimumColumnCount, fittedColumnCount)
+    }
+
     @ViewBuilder
     private func collectionRow(for collection: MosaicCollection) -> some View {
-#if os(iOS)
-        NavigationLink {
-            CollectionDetailView(collection: collection)
-        } label: {
-            CollectionCard(collection: collection)
+        let card = CollectionCard(
+            collection: collection,
+            isDragged: draggedCollectionID == collection.persistentModelID
+        )
+        .accessibilityIdentifier("collectionCard.\(collection.name)")
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .preference(
+                        key: CollectionFramePreferenceKey.self,
+                        value: [collection.persistentModelID: geometry.frame(in: .named(gridCoordinateSpaceName))]
+                    )
+            }
         }
-        .buttonStyle(.plain)
-#else
-        HStack(spacing: 12) {
+        .overlay(alignment: .topTrailing) {
+            if isCollectionEditing && draggedCollectionID != collection.persistentModelID {
+                Button(role: .destructive) {
+                    deleteCollection(collection)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.headline)
+                        .padding(10)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .accessibilityLabel("Delete \(collection.name)")
+                .accessibilityIdentifier("deleteCollection.\(collection.name)")
+                .padding(10)
+            }
+        }
+        .zIndex(draggedCollectionID == collection.persistentModelID ? 1 : 0)
+
+        if isCollectionEditing {
+            card
+                .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .gesture(dragGesture(for: collection))
+        } else {
             NavigationLink {
                 CollectionDetailView(collection: collection)
             } label: {
-                CollectionCard(collection: collection)
+                card
             }
             .buttonStyle(.plain)
-
-            if isEditingCollections {
-                VStack(spacing: 8) {
-                    Button {
-                        moveCollection(collection, by: -1)
-                    } label: {
-                        Image(systemName: "arrow.up")
-                    }
-                    .accessibilityLabel("Move collection up")
-                    .disabled(index(of: collection) == 0)
-
-                    Button {
-                        moveCollection(collection, by: 1)
-                    } label: {
-                        Image(systemName: "arrow.down")
-                    }
-                    .accessibilityLabel("Move collection down")
-                    .disabled(index(of: collection) == collections.count - 1)
-
-                    Button(role: .destructive) {
-                        deleteCollection(collection)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .accessibilityLabel("Delete collection")
-                }
-                .buttonStyle(.bordered)
-                .labelStyle(.iconOnly)
-            }
         }
-#endif
     }
 
-#if os(macOS)
+    private func dragGesture(for collection: MosaicCollection) -> some Gesture {
+        DragGesture(coordinateSpace: .named(gridCoordinateSpaceName))
+            .onChanged { value in
+                updateDrag(for: collection, value: value)
+            }
+            .onEnded { _ in
+                endDrag()
+            }
+    }
+
     private func index(of collection: MosaicCollection) -> Int {
         collections.firstIndex { $0.persistentModelID == collection.persistentModelID } ?? 0
     }
 
-    private func moveCollection(_ collection: MosaicCollection, by delta: Int) {
+    @discardableResult
+    private func moveCollection(
+        _ collection: MosaicCollection,
+        relativeTo targetCollection: MosaicCollection,
+        insertingAfter: Bool
+    ) -> Bool {
         let currentIndex = index(of: collection)
-        let targetIndex = currentIndex + delta
-        guard collections.indices.contains(targetIndex) else { return }
+        let targetIndex = index(of: targetCollection)
+        guard currentIndex != targetIndex else { return false }
 
         var reorderedCollections = collections
-        reorderedCollections.swapAt(currentIndex, targetIndex)
+        let movingCollection = reorderedCollections.remove(at: currentIndex)
+        guard let adjustedTargetIndex = reorderedCollections.firstIndex(where: {
+            $0.persistentModelID == targetCollection.persistentModelID
+        }) else {
+            return false
+        }
 
-        withAnimation {
+        let destinationIndex = insertingAfter ? adjustedTargetIndex + 1 : adjustedTargetIndex
+        reorderedCollections.insert(movingCollection, at: destinationIndex)
+
+        guard reorderedCollections.map(\.persistentModelID) != collections.map(\.persistentModelID) else {
+            return false
+        }
+
+        withAnimation(reorderAnimation) {
             for (index, collection) in reorderedCollections.enumerated() {
                 collection.order = index
             }
         }
+
+#if os(iOS)
+        reorderFeedbackGenerator.impactOccurred(intensity: 0.8)
+        reorderFeedbackGenerator.prepare()
+#endif
+        return true
     }
 
     private func deleteCollection(_ collection: MosaicCollection) {
         pendingCollectionDeletion = PendingCollectionDeletion(collections: [collection])
     }
-#endif
+
+    private func updateDrag(for collection: MosaicCollection, value: DragGesture.Value) {
+        if draggedCollectionID == nil {
+            beginDrag(for: collection, value: value)
+        }
+
+        guard draggedCollectionID == collection.persistentModelID else { return }
+
+        draggedCollectionLocation = value.location
+        guard let reorderTarget = reorderTarget(for: currentDraggedCenter(), dragging: collection) else {
+            lastReorderTarget = nil
+            return
+        }
+        guard reorderTarget != lastReorderTarget else { return }
+        guard let targetCollection = collectionForID(reorderTarget.collectionID) else { return }
+
+        lastReorderTarget = reorderTarget
+        let didMove = moveCollection(
+            collection,
+            relativeTo: targetCollection,
+            insertingAfter: reorderTarget.insertingAfter
+        )
+
+        if !didMove {
+            lastReorderTarget = nil
+        }
+    }
+
+    private func beginDrag(for collection: MosaicCollection, value: DragGesture.Value) {
+        draggedCollectionID = collection.persistentModelID
+        lastReorderTarget = nil
+        isDragPreviewLifted = false
+
+        guard let frame = collectionFrames[collection.persistentModelID] else {
+            draggedCollectionLocation = value.location
+            draggedCollectionTouchOffset = .zero
+            withAnimation(pickupAnimation) {
+                isDragPreviewLifted = true
+            }
+            return
+        }
+
+        draggedCollectionLocation = value.location
+        draggedCollectionTouchOffset = CGSize(
+            width: value.startLocation.x - frame.midX,
+            height: value.startLocation.y - frame.midY
+        )
+
+        withAnimation(pickupAnimation) {
+            isDragPreviewLifted = true
+        }
+    }
+
+    private func endDrag() {
+        guard let draggedCollectionID,
+              let frame = collectionFrames[draggedCollectionID] else {
+            resetDragState()
+            return
+        }
+
+        let settledLocation = CGPoint(
+            x: frame.midX + draggedCollectionTouchOffset.width,
+            y: frame.midY + draggedCollectionTouchOffset.height
+        )
+
+        withAnimation(dropCompletionAnimation) {
+            isDragPreviewLifted = false
+            draggedCollectionLocation = settledLocation
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+            resetDragState()
+        }
+    }
+
+    private func resetDragState() {
+        draggedCollectionID = nil
+        draggedCollectionLocation = nil
+        draggedCollectionTouchOffset = .zero
+        lastReorderTarget = nil
+        isDragPreviewLifted = false
+    }
+
+    private func currentDraggedCenter() -> CGPoint {
+        CGPoint(
+            x: (draggedCollectionLocation?.x ?? 0) - draggedCollectionTouchOffset.width,
+            y: (draggedCollectionLocation?.y ?? 0) - draggedCollectionTouchOffset.height
+        )
+    }
+
+    private func reorderTarget(for draggedCenter: CGPoint, dragging collection: MosaicCollection) -> ReorderTarget? {
+        let otherCollections = collections.filter { $0.persistentModelID != draggedCollectionID }
+        let draggingIndex = index(of: collection)
+        let draggingRow = draggingIndex / max(currentGridColumnCount, 1)
+        let draggingColumn = draggingIndex % max(currentGridColumnCount, 1)
+
+        for targetCollection in otherCollections {
+            guard let frame = collectionFrames[targetCollection.persistentModelID] else { continue }
+            let activeFrame = frame.insetBy(dx: frame.width * 0.04, dy: frame.height * 0.04)
+            guard activeFrame.contains(draggedCenter) else { continue }
+
+            let targetIndex = index(of: targetCollection)
+            let targetRow = targetIndex / max(currentGridColumnCount, 1)
+            let targetColumn = targetIndex % max(currentGridColumnCount, 1)
+
+            let insertsAfter: Bool
+            if currentGridColumnCount == 1 || targetRow != draggingRow {
+                let verticalThreshold = frame.height * 0.12
+                insertsAfter = draggedCenter.y > frame.midY - verticalThreshold
+            } else if targetColumn != draggingColumn {
+                let horizontalThreshold = frame.width * 0.12
+                insertsAfter = draggedCenter.x > frame.midX - horizontalThreshold
+            } else {
+                let dx = draggedCenter.x - frame.midX
+                let dy = draggedCenter.y - frame.midY
+                insertsAfter = abs(dx) > abs(dy) ? dx > 0 : dy > 0
+            }
+
+            return ReorderTarget(
+                collectionID: targetCollection.persistentModelID,
+                insertingAfter: insertsAfter
+            )
+        }
+
+        return nil
+    }
+
+    private func collectionForID(_ id: PersistentIdentifier) -> MosaicCollection? {
+        collections.first { $0.persistentModelID == id }
+    }
 
 }
 
@@ -267,6 +510,7 @@ private struct EmptyMosaicView: View {
 
 private struct CollectionCard: View {
     let collection: MosaicCollection
+    let isDragged: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -283,6 +527,11 @@ private struct CollectionCard: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(gradient(for: collection.kind))
         )
+        .opacity(isDragged ? 0.001 : 1)
+        .scaleEffect(isDragged ? 0.98 : 1)
+        .shadow(color: .black.opacity(isDragged ? 0.18 : 0), radius: isDragged ? 14 : 0, y: isDragged ? 8 : 0)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(collection.name)
     }
 
     private func gradient(for kind: CollectionKind) -> LinearGradient {
@@ -300,6 +549,19 @@ private struct CollectionCard: View {
             colors = [Color(red: 0.20, green: 0.20, blue: 0.28), Color(red: 0.38, green: 0.28, blue: 0.36)]
         }
         return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+private struct ReorderTarget: Equatable {
+    let collectionID: PersistentIdentifier
+    let insertingAfter: Bool
+}
+
+private struct CollectionFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [PersistentIdentifier: CGRect] = [:]
+
+    static func reduce(value: inout [PersistentIdentifier: CGRect], nextValue: () -> [PersistentIdentifier: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 
