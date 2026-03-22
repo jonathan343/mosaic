@@ -509,6 +509,8 @@ private struct EmptyMosaicView: View {
 }
 
 private struct CollectionCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let collection: MosaicCollection
     let isDragged: Bool
 
@@ -526,6 +528,10 @@ private struct CollectionCard: View {
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(gradient(for: collection.kind))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(surfaceHighlight)
+                }
         )
         .opacity(isDragged ? 0.001 : 1)
         .scaleEffect(isDragged ? 0.98 : 1)
@@ -538,17 +544,39 @@ private struct CollectionCard: View {
         let colors: [Color]
         switch kind {
         case .movies:
-            colors = [Color(red: 0.18, green: 0.27, blue: 0.38), Color(red: 0.39, green: 0.19, blue: 0.52)]
+            colors = colorScheme == .dark
+                ? [Color(red: 0.20, green: 0.45, blue: 0.83), Color(red: 0.47, green: 0.27, blue: 0.91), Color(red: 0.76, green: 0.30, blue: 0.81)]
+                : [Color(red: 0.35, green: 0.60, blue: 0.97), Color(red: 0.54, green: 0.42, blue: 0.96), Color(red: 0.90, green: 0.48, blue: 0.85)]
         case .tvShows:
-            colors = [Color(red: 0.15, green: 0.32, blue: 0.31), Color(red: 0.18, green: 0.49, blue: 0.58)]
+            colors = colorScheme == .dark
+                ? [Color(red: 0.10, green: 0.60, blue: 0.56), Color(red: 0.14, green: 0.68, blue: 0.82), Color(red: 0.26, green: 0.51, blue: 0.95)]
+                : [Color(red: 0.23, green: 0.76, blue: 0.66), Color(red: 0.29, green: 0.80, blue: 0.89), Color(red: 0.44, green: 0.61, blue: 0.99)]
         case .books:
-            colors = [Color(red: 0.22, green: 0.36, blue: 0.25), Color(red: 0.46, green: 0.31, blue: 0.16)]
+            colors = colorScheme == .dark
+                ? [Color(red: 0.16, green: 0.57, blue: 0.35), Color(red: 0.46, green: 0.69, blue: 0.22), Color(red: 0.87, green: 0.63, blue: 0.21)]
+                : [Color(red: 0.29, green: 0.74, blue: 0.43), Color(red: 0.58, green: 0.82, blue: 0.31), Color(red: 0.96, green: 0.74, blue: 0.32)]
         case .albums:
-            colors = [Color(red: 0.33, green: 0.16, blue: 0.13), Color(red: 0.52, green: 0.34, blue: 0.22)]
+            colors = colorScheme == .dark
+                ? [Color(red: 0.84, green: 0.30, blue: 0.34), Color(red: 0.93, green: 0.47, blue: 0.22), Color(red: 0.98, green: 0.73, blue: 0.25)]
+                : [Color(red: 0.94, green: 0.42, blue: 0.42), Color(red: 0.98, green: 0.60, blue: 0.29), Color(red: 0.99, green: 0.81, blue: 0.36)]
         case .custom:
-            colors = [Color(red: 0.20, green: 0.20, blue: 0.28), Color(red: 0.38, green: 0.28, blue: 0.36)]
+            colors = colorScheme == .dark
+                ? [Color(red: 0.38, green: 0.34, blue: 0.84), Color(red: 0.76, green: 0.33, blue: 0.84), Color(red: 0.99, green: 0.47, blue: 0.64)]
+                : [Color(red: 0.53, green: 0.51, blue: 0.95), Color(red: 0.85, green: 0.46, blue: 0.91), Color(red: 0.99, green: 0.58, blue: 0.72)]
         }
         return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    private var surfaceHighlight: LinearGradient {
+        LinearGradient(
+            colors: [
+                .white.opacity(colorScheme == .dark ? 0.18 : 0.26),
+                .white.opacity(colorScheme == .dark ? 0.04 : 0.10),
+                .black.opacity(colorScheme == .dark ? 0.14 : 0.08)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 }
 
