@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5E7574342F6F988200490D5E /* MosaicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7574322F6F988200490D5E /* MosaicStore.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		5EE2FAC42F6F5D2600E12AD2 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -24,6 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		5E7574322F6F988200490D5E /* MosaicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MosaicStore.swift; sourceTree = "<group>"; };
 		5EE2FAB42F6F5D2500E12AD2 /* Mosaic.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mosaic.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5EE2FAC32F6F5D2600E12AD2 /* MosaicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MosaicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5EE2FACD2F6F5D2600E12AD2 /* MosaicUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MosaicUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -79,6 +84,7 @@
 				5EE2FAC62F6F5D2600E12AD2 /* MosaicTests */,
 				5EE2FAD02F6F5D2600E12AD2 /* MosaicUITests */,
 				5EE2FAB52F6F5D2500E12AD2 /* Products */,
+				5E7574322F6F988200490D5E /* MosaicStore.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -236,6 +242,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5E7574342F6F988200490D5E /* MosaicStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

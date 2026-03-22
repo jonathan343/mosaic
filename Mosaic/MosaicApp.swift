@@ -12,7 +12,10 @@ import SwiftData
 struct MosaicApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            MosaicCollection.self,
+            MosaicTile.self,
+            FieldDefinition.self,
+            FieldValue.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
