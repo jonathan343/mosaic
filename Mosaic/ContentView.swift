@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var isEditingCollections = false
 #endif
     @State private var isPresentingAddCollection = false
+    @State private var pendingCollectionDeletion: PendingCollectionDeletion?
 
     var body: some View {
         NavigationStack {
@@ -84,6 +85,16 @@ struct ContentView: View {
             .sheet(isPresented: $isPresentingAddCollection) {
                 AddCollectionSheet(collectionCount: collections.count)
             }
+            .alert(item: $pendingCollectionDeletion) { deletion in
+                Alert(
+                    title: Text(deletion.title),
+                    message: Text(deletion.message),
+                    primaryButton: .destructive(Text("Delete")) {
+                        confirmCollectionDeletion(deletion)
+                    },
+                    secondaryButton: .cancel()
+                )
+            }
             .task {
                 seedCollectionsIfNeeded()
             }
@@ -99,13 +110,21 @@ struct ContentView: View {
     }
 
     private func deleteCollections(offsets: IndexSet) {
-        let survivingCollections = collections.enumerated()
-            .filter { !offsets.contains($0.offset) }
-            .map(\.element)
+        let collectionsToDelete = offsets.map { collections[$0] }
+        guard !collectionsToDelete.isEmpty else { return }
+
+        pendingCollectionDeletion = PendingCollectionDeletion(collections: collectionsToDelete)
+    }
+
+    private func confirmCollectionDeletion(_ deletion: PendingCollectionDeletion) {
+        let collectionIDs = deletion.collectionIDs
+        let survivingCollections = collections.filter { collection in
+            !collectionIDs.contains(collection.persistentModelID)
+        }
 
         withAnimation {
-            for index in offsets {
-                modelContext.delete(collections[index])
+            for collection in collections where collectionIDs.contains(collection.persistentModelID) {
+                modelContext.delete(collection)
             }
             normalizeCollectionOrder(for: survivingCollections)
         }
@@ -200,15 +219,33 @@ struct ContentView: View {
     }
 
     private func deleteCollection(_ collection: MosaicCollection) {
-        let survivingCollections = collections.filter { $0.persistentModelID != collection.persistentModelID }
-
-        withAnimation {
-            modelContext.delete(collection)
-            normalizeCollectionOrder(for: survivingCollections)
-        }
+        pendingCollectionDeletion = PendingCollectionDeletion(collections: [collection])
     }
 #endif
 
+}
+
+private struct PendingCollectionDeletion: Identifiable {
+    let id = UUID()
+    let collectionIDs: [PersistentIdentifier]
+    let collectionNames: [String]
+
+    init(collections: [MosaicCollection]) {
+        self.collectionIDs = collections.map(\.persistentModelID)
+        self.collectionNames = collections.map(\.name)
+    }
+
+    var title: String {
+        collectionNames.count == 1 ? "Delete Collection?" : "Delete Collections?"
+    }
+
+    var message: String {
+        if collectionNames.count == 1, let name = collectionNames.first {
+            return "\"\(name)\" and all of its tiles will be permanently deleted."
+        }
+
+        return "\(collectionNames.count) collections and all of their tiles will be permanently deleted."
+    }
 }
 
 private struct EmptyMosaicView: View {
